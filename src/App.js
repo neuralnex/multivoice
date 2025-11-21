@@ -7,16 +7,23 @@ const API_BASE_URL = 'https://nexusbert-multi-voice-system.hf.space';
 function App() {
   const [baseUrl, setBaseUrl] = useState(API_BASE_URL);
   const [responses, setResponses] = useState({});
+  const [loading, setLoading] = useState({});
 
   const updateResponse = (endpoint, data, error = null) => {
     setResponses(prev => ({
       ...prev,
       [endpoint]: { data, error, timestamp: new Date().toISOString() }
     }));
+    setLoading(prev => ({ ...prev, [endpoint]: false }));
+  };
+
+  const setEndpointLoading = (endpoint, isLoading) => {
+    setLoading(prev => ({ ...prev, [endpoint]: isLoading }));
   };
 
   // GET / - Root endpoint
   const testRoot = async () => {
+    setEndpointLoading('root', true);
     try {
       const response = await axios.get(`${baseUrl}/`);
       updateResponse('root', response.data);
@@ -27,6 +34,7 @@ function App() {
 
   // GET /health - Health check
   const testHealth = async () => {
+    setEndpointLoading('health', true);
     try {
       const response = await axios.get(`${baseUrl}/health`);
       updateResponse('health', response.data);
@@ -37,6 +45,7 @@ function App() {
 
   // POST /ask - Ask query
   const testAsk = async (query) => {
+    setEndpointLoading('ask', true);
     try {
       const formData = new FormData();
       formData.append('query', query);
@@ -49,6 +58,7 @@ function App() {
 
   // POST /transcribe - Transcribe audio
   const testTranscribe = async (audioFile, language) => {
+    setEndpointLoading('transcribe', true);
     try {
       const formData = new FormData();
       formData.append('audio_file', audioFile);
@@ -64,6 +74,7 @@ function App() {
 
   // POST /transcribe/{language} - Language-specific transcribe
   const testTranscribeLanguage = async (audioFile, language) => {
+    setEndpointLoading(`transcribe_${language}`, true);
     try {
       const formData = new FormData();
       formData.append('audio_file', audioFile);
@@ -78,6 +89,7 @@ function App() {
 
   // POST /speak-ai - Speak AI
   const testSpeakAI = async (audioFile, language) => {
+    setEndpointLoading('speak-ai', true);
     try {
       const formData = new FormData();
       formData.append('audio_file', audioFile);
@@ -95,6 +107,7 @@ function App() {
 
   // POST /tts - Text to speech
   const testTTS = async (text, language, speakerName, temperature, repetitionPenalty, maxLength) => {
+    setEndpointLoading('tts', true);
     try {
       const response = await axios.post(`${baseUrl}/tts`, {
         text,
@@ -115,6 +128,7 @@ function App() {
 
   // POST /tts/{language} - Language-specific TTS
   const testTTSLanguage = async (text, language, speakerName, temperature, repetitionPenalty, maxLength) => {
+    setEndpointLoading(`tts_${language}`, true);
     try {
       const response = await axios.post(`${baseUrl}/tts/${language}`, {
         text,
@@ -135,6 +149,7 @@ function App() {
 
   // POST /speak - Speak
   const testSpeak = async (text, language, temperature, repetitionPenalty, maxLength) => {
+    setEndpointLoading('speak', true);
     try {
       const response = await axios.post(`${baseUrl}/speak`, {
         text,
@@ -154,6 +169,7 @@ function App() {
 
   // POST /tts-stream - TTS Stream
   const testTTSStream = async (text, language, speakerName, temperature, repetitionPenalty, maxLength) => {
+    setEndpointLoading('tts-stream', true);
     try {
       const response = await axios.post(`${baseUrl}/tts-stream`, {
         text,
@@ -175,8 +191,8 @@ function App() {
   return (
     <div className="app">
       <div className="header">
-        <h1>🎤 Multi Voice System API Tester</h1>
-        <p>Test all FastAPI endpoints for the Multi Speech System</p>
+        <h1>Multi Voice System API Tester</h1>
+        <p>Test and interact with all FastAPI endpoints</p>
       </div>
 
       <div className="api-base-url">
@@ -194,12 +210,18 @@ function App() {
         <h2>GET Endpoints</h2>
         
         <div className="endpoint-card">
-          <h3>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.5rem' }}>
             <span className="method get">GET</span>
             <span className="path">/</span>
-          </h3>
-          <p>Root endpoint - Get system information</p>
-          <button className="button" onClick={testRoot}>Test Root</button>
+          </div>
+          <p style={{ marginBottom: '1rem', color: '#6c757d', fontSize: '0.875rem' }}>Root endpoint - Get system information</p>
+          <button 
+            className="button" 
+            onClick={testRoot}
+            disabled={loading.root}
+          >
+            {loading.root ? 'Loading...' : 'Test Root'}
+          </button>
           {responses.root && (
             <div className={`response ${responses.root.error ? 'error' : 'success'}`}>
               <h4>Response:</h4>
@@ -209,12 +231,18 @@ function App() {
         </div>
 
         <div className="endpoint-card">
-          <h3>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.5rem' }}>
             <span className="method get">GET</span>
             <span className="path">/health</span>
-          </h3>
-          <p>Health check endpoint</p>
-          <button className="button" onClick={testHealth}>Test Health</button>
+          </div>
+          <p style={{ marginBottom: '1rem', color: '#6c757d', fontSize: '0.875rem' }}>Health check endpoint</p>
+          <button 
+            className="button" 
+            onClick={testHealth}
+            disabled={loading.health}
+          >
+            {loading.health ? 'Loading...' : 'Test Health'}
+          </button>
           {responses.health && (
             <div className={`response ${responses.health.error ? 'error' : 'success'}`}>
               <h4>Response:</h4>
@@ -227,56 +255,56 @@ function App() {
       {/* POST /ask */}
       <div className="endpoint-section">
         <h2>POST /ask</h2>
-        <AskForm onSubmit={testAsk} response={responses.ask} />
+        <AskForm onSubmit={testAsk} response={responses.ask} loading={loading.ask} />
       </div>
 
       {/* POST /transcribe */}
       <div className="endpoint-section">
         <h2>POST /transcribe</h2>
-        <TranscribeForm onSubmit={testTranscribe} response={responses.transcribe} />
+        <TranscribeForm onSubmit={testTranscribe} response={responses.transcribe} loading={loading.transcribe} />
       </div>
 
       {/* POST /transcribe/{language} */}
       <div className="endpoint-section">
         <h2>POST /transcribe/{'{language}'}</h2>
-        <TranscribeLanguageForm onSubmit={testTranscribeLanguage} response={responses} />
+        <TranscribeLanguageForm onSubmit={testTranscribeLanguage} response={responses} loading={loading} />
       </div>
 
       {/* POST /speak-ai */}
       <div className="endpoint-section">
         <h2>POST /speak-ai</h2>
-        <SpeakAIForm onSubmit={testSpeakAI} response={responses['speak-ai']} />
+        <SpeakAIForm onSubmit={testSpeakAI} response={responses['speak-ai']} loading={loading['speak-ai']} />
       </div>
 
       {/* POST /tts */}
       <div className="endpoint-section">
         <h2>POST /tts</h2>
-        <TTSForm onSubmit={testTTS} response={responses.tts} />
+        <TTSForm onSubmit={testTTS} response={responses.tts} loading={loading.tts} />
       </div>
 
       {/* POST /tts/{language} */}
       <div className="endpoint-section">
         <h2>POST /tts/{'{language}'}</h2>
-        <TTSLanguageForm onSubmit={testTTSLanguage} response={responses} />
+        <TTSLanguageForm onSubmit={testTTSLanguage} response={responses} loading={loading} />
       </div>
 
       {/* POST /speak */}
       <div className="endpoint-section">
         <h2>POST /speak</h2>
-        <SpeakForm onSubmit={testSpeak} response={responses.speak} />
+        <SpeakForm onSubmit={testSpeak} response={responses.speak} loading={loading.speak} />
       </div>
 
       {/* POST /tts-stream */}
       <div className="endpoint-section">
         <h2>POST /tts-stream</h2>
-        <TTSForm onSubmit={testTTSStream} response={responses['tts-stream']} />
+        <TTSForm onSubmit={testTTSStream} response={responses['tts-stream']} loading={loading['tts-stream']} />
       </div>
     </div>
   );
 }
 
 // Ask Form Component
-function AskForm({ onSubmit, response }) {
+function AskForm({ onSubmit, response, loading }) {
   const [query, setQuery] = useState('');
 
   const handleSubmit = (e) => {
@@ -287,16 +315,19 @@ function AskForm({ onSubmit, response }) {
   return (
     <form onSubmit={handleSubmit}>
       <div className="form-group">
-        <label>Query:</label>
+        <label>Query</label>
         <input
           type="text"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Enter your query"
           required
+          disabled={loading}
         />
       </div>
-      <button type="submit" className="button">Test Ask</button>
+      <button type="submit" className="button" disabled={loading}>
+        {loading ? 'Loading...' : 'Test Ask'}
+      </button>
       {response && (
         <div className={`response ${response.error ? 'error' : 'success'}`}>
           <h4>Response:</h4>
@@ -308,7 +339,7 @@ function AskForm({ onSubmit, response }) {
 }
 
 // Transcribe Form Component
-function TranscribeForm({ onSubmit, response }) {
+function TranscribeForm({ onSubmit, response, loading }) {
   const [audioFile, setAudioFile] = useState(null);
   const [language, setLanguage] = useState('en');
 
@@ -322,24 +353,27 @@ function TranscribeForm({ onSubmit, response }) {
   return (
     <form onSubmit={handleSubmit}>
       <div className="form-group">
-        <label>Audio File:</label>
+        <label>Audio File</label>
         <input
           type="file"
           accept="audio/*"
           onChange={(e) => setAudioFile(e.target.files[0])}
           required
+          disabled={loading}
         />
       </div>
       <div className="form-group">
-        <label>Language Code:</label>
-        <select value={language} onChange={(e) => setLanguage(e.target.value)}>
+        <label>Language Code</label>
+        <select value={language} onChange={(e) => setLanguage(e.target.value)} disabled={loading}>
           <option value="en">English (en)</option>
           <option value="yo">Yoruba (yo)</option>
           <option value="ig">Igbo (ig)</option>
           <option value="ha">Hausa (ha)</option>
         </select>
       </div>
-      <button type="submit" className="button">Test Transcribe</button>
+      <button type="submit" className="button" disabled={loading}>
+        {loading ? 'Loading...' : 'Test Transcribe'}
+      </button>
       {response && (
         <div className={`response ${response.error ? 'error' : 'success'}`}>
           <h4>Response:</h4>
@@ -351,9 +385,10 @@ function TranscribeForm({ onSubmit, response }) {
 }
 
 // Transcribe Language Form Component
-function TranscribeLanguageForm({ onSubmit, response }) {
+function TranscribeLanguageForm({ onSubmit, response, loading }) {
   const [audioFile, setAudioFile] = useState(null);
   const [language, setLanguage] = useState('english');
+  const isLoading = loading[`transcribe_${language}`];
 
   const handleSubmit = (e) => {
     e.preventDefault();
@@ -365,24 +400,27 @@ function TranscribeLanguageForm({ onSubmit, response }) {
   return (
     <form onSubmit={handleSubmit}>
       <div className="form-group">
-        <label>Audio File:</label>
+        <label>Audio File</label>
         <input
           type="file"
           accept="audio/*"
           onChange={(e) => setAudioFile(e.target.files[0])}
           required
+          disabled={isLoading}
         />
       </div>
       <div className="form-group">
-        <label>Language:</label>
-        <select value={language} onChange={(e) => setLanguage(e.target.value)}>
+        <label>Language</label>
+        <select value={language} onChange={(e) => setLanguage(e.target.value)} disabled={isLoading}>
           <option value="english">English</option>
           <option value="yoruba">Yoruba</option>
           <option value="igbo">Igbo</option>
           <option value="hausa">Hausa</option>
         </select>
       </div>
-      <button type="submit" className="button">Test Transcribe {language}</button>
+      <button type="submit" className="button" disabled={isLoading}>
+        {isLoading ? 'Loading...' : `Test Transcribe ${language}`}
+      </button>
       {response[`transcribe_${language}`] && (
         <div className={`response ${response[`transcribe_${language}`].error ? 'error' : 'success'}`}>
           <h4>Response:</h4>
@@ -394,7 +432,7 @@ function TranscribeLanguageForm({ onSubmit, response }) {
 }
 
 // Speak AI Form Component
-function SpeakAIForm({ onSubmit, response }) {
+function SpeakAIForm({ onSubmit, response, loading }) {
   const [audioFile, setAudioFile] = useState(null);
   const [language, setLanguage] = useState('en');
 
@@ -408,24 +446,27 @@ function SpeakAIForm({ onSubmit, response }) {
   return (
     <form onSubmit={handleSubmit}>
       <div className="form-group">
-        <label>Audio File:</label>
+        <label>Audio File</label>
         <input
           type="file"
           accept="audio/*"
           onChange={(e) => setAudioFile(e.target.files[0])}
           required
+          disabled={loading}
         />
       </div>
       <div className="form-group">
-        <label>Language Code:</label>
-        <select value={language} onChange={(e) => setLanguage(e.target.value)}>
+        <label>Language Code</label>
+        <select value={language} onChange={(e) => setLanguage(e.target.value)} disabled={loading}>
           <option value="en">English (en)</option>
           <option value="yo">Yoruba (yo)</option>
           <option value="ig">Igbo (ig)</option>
           <option value="ha">Hausa (ha)</option>
         </select>
       </div>
-      <button type="submit" className="button">Test Speak AI</button>
+      <button type="submit" className="button" disabled={loading}>
+        {loading ? 'Loading...' : 'Test Speak AI'}
+      </button>
       {response && (
         <div className={`response ${response.error ? 'error' : 'success'}`}>
           <h4>Response:</h4>
@@ -450,7 +491,7 @@ function SpeakAIForm({ onSubmit, response }) {
 }
 
 // TTS Form Component
-function TTSForm({ onSubmit, response }) {
+function TTSForm({ onSubmit, response, loading }) {
   const [text, setText] = useState('Hello, this is a test of the text to speech system.');
   const [language, setLanguage] = useState('english');
   const [speakerName, setSpeakerName] = useState('idera');
@@ -466,18 +507,19 @@ function TTSForm({ onSubmit, response }) {
   return (
     <form onSubmit={handleSubmit}>
       <div className="form-group">
-        <label>Text:</label>
+        <label>Text</label>
         <textarea
           value={text}
           onChange={(e) => setText(e.target.value)}
           placeholder="Enter text to convert to speech"
           required
+          disabled={loading}
         />
       </div>
       <div className="form-row">
         <div className="form-group">
-          <label>Language:</label>
-          <select value={language} onChange={(e) => setLanguage(e.target.value)}>
+          <label>Language</label>
+          <select value={language} onChange={(e) => setLanguage(e.target.value)} disabled={loading}>
             <option value="english">English</option>
             <option value="yoruba">Yoruba</option>
             <option value="igbo">Igbo</option>
@@ -485,45 +527,51 @@ function TTSForm({ onSubmit, response }) {
           </select>
         </div>
         <div className="form-group">
-          <label>Speaker Name:</label>
+          <label>Speaker Name</label>
           <input
             type="text"
             value={speakerName}
             onChange={(e) => setSpeakerName(e.target.value)}
             placeholder="idera"
+            disabled={loading}
           />
         </div>
         <div className="form-group">
-          <label>Temperature:</label>
+          <label>Temperature</label>
           <input
             type="number"
             step="0.1"
             value={temperature}
             onChange={(e) => setTemperature(e.target.value)}
             placeholder="0.1"
+            disabled={loading}
           />
         </div>
         <div className="form-group">
-          <label>Repetition Penalty:</label>
+          <label>Repetition Penalty</label>
           <input
             type="number"
             step="0.1"
             value={repetitionPenalty}
             onChange={(e) => setRepetitionPenalty(e.target.value)}
             placeholder="1.1"
+            disabled={loading}
           />
         </div>
         <div className="form-group">
-          <label>Max Length:</label>
+          <label>Max Length</label>
           <input
             type="number"
             value={maxLength}
             onChange={(e) => setMaxLength(e.target.value)}
             placeholder="4000"
+            disabled={loading}
           />
         </div>
       </div>
-      <button type="submit" className="button">Test TTS</button>
+      <button type="submit" className="button" disabled={loading}>
+        {loading ? 'Loading...' : 'Test TTS'}
+      </button>
       {response && (
         <div className={`response ${response.error ? 'error' : 'success'}`}>
           <h4>Response:</h4>
@@ -548,13 +596,14 @@ function TTSForm({ onSubmit, response }) {
 }
 
 // TTS Language Form Component
-function TTSLanguageForm({ onSubmit, response }) {
+function TTSLanguageForm({ onSubmit, response, loading }) {
   const [text, setText] = useState('Hello, this is a test of the text to speech system.');
   const [language, setLanguage] = useState('english');
   const [speakerName, setSpeakerName] = useState('idera');
   const [temperature, setTemperature] = useState('0.1');
   const [repetitionPenalty, setRepetitionPenalty] = useState('1.1');
   const [maxLength, setMaxLength] = useState('4000');
+  const isLoading = loading[`tts_${language}`];
 
   const handleSubmit = (e) => {
     e.preventDefault();
@@ -564,18 +613,19 @@ function TTSLanguageForm({ onSubmit, response }) {
   return (
     <form onSubmit={handleSubmit}>
       <div className="form-group">
-        <label>Text:</label>
+        <label>Text</label>
         <textarea
           value={text}
           onChange={(e) => setText(e.target.value)}
           placeholder="Enter text to convert to speech"
           required
+          disabled={isLoading}
         />
       </div>
       <div className="form-row">
         <div className="form-group">
-          <label>Language:</label>
-          <select value={language} onChange={(e) => setLanguage(e.target.value)}>
+          <label>Language</label>
+          <select value={language} onChange={(e) => setLanguage(e.target.value)} disabled={isLoading}>
             <option value="english">English</option>
             <option value="yoruba">Yoruba</option>
             <option value="igbo">Igbo</option>
@@ -583,45 +633,51 @@ function TTSLanguageForm({ onSubmit, response }) {
           </select>
         </div>
         <div className="form-group">
-          <label>Speaker Name:</label>
+          <label>Speaker Name</label>
           <input
             type="text"
             value={speakerName}
             onChange={(e) => setSpeakerName(e.target.value)}
             placeholder="idera"
+            disabled={isLoading}
           />
         </div>
         <div className="form-group">
-          <label>Temperature:</label>
+          <label>Temperature</label>
           <input
             type="number"
             step="0.1"
             value={temperature}
             onChange={(e) => setTemperature(e.target.value)}
             placeholder="0.1"
+            disabled={isLoading}
           />
         </div>
         <div className="form-group">
-          <label>Repetition Penalty:</label>
+          <label>Repetition Penalty</label>
           <input
             type="number"
             step="0.1"
             value={repetitionPenalty}
             onChange={(e) => setRepetitionPenalty(e.target.value)}
             placeholder="1.1"
+            disabled={isLoading}
           />
         </div>
         <div className="form-group">
-          <label>Max Length:</label>
+          <label>Max Length</label>
           <input
             type="number"
             value={maxLength}
             onChange={(e) => setMaxLength(e.target.value)}
             placeholder="4000"
+            disabled={isLoading}
           />
         </div>
       </div>
-      <button type="submit" className="button">Test TTS {language}</button>
+      <button type="submit" className="button" disabled={isLoading}>
+        {isLoading ? 'Loading...' : `Test TTS ${language}`}
+      </button>
       {response[`tts_${language}`] && (
         <div className={`response ${response[`tts_${language}`].error ? 'error' : 'success'}`}>
           <h4>Response:</h4>
@@ -646,7 +702,7 @@ function TTSLanguageForm({ onSubmit, response }) {
 }
 
 // Speak Form Component
-function SpeakForm({ onSubmit, response }) {
+function SpeakForm({ onSubmit, response, loading }) {
   const [text, setText] = useState('Hello, this is a test of the speak system.');
   const [language, setLanguage] = useState('english');
   const [temperature, setTemperature] = useState('');
@@ -661,18 +717,19 @@ function SpeakForm({ onSubmit, response }) {
   return (
     <form onSubmit={handleSubmit}>
       <div className="form-group">
-        <label>Text:</label>
+        <label>Text</label>
         <textarea
           value={text}
           onChange={(e) => setText(e.target.value)}
           placeholder="Enter text to speak"
           required
+          disabled={loading}
         />
       </div>
       <div className="form-row">
         <div className="form-group">
-          <label>Language:</label>
-          <select value={language} onChange={(e) => setLanguage(e.target.value)}>
+          <label>Language</label>
+          <select value={language} onChange={(e) => setLanguage(e.target.value)} disabled={loading}>
             <option value="english">English</option>
             <option value="yoruba">Yoruba</option>
             <option value="igbo">Igbo</option>
@@ -680,36 +737,41 @@ function SpeakForm({ onSubmit, response }) {
           </select>
         </div>
         <div className="form-group">
-          <label>Temperature (optional):</label>
+          <label>Temperature (optional)</label>
           <input
             type="number"
             step="0.1"
             value={temperature}
             onChange={(e) => setTemperature(e.target.value)}
             placeholder="0.1"
+            disabled={loading}
           />
         </div>
         <div className="form-group">
-          <label>Repetition Penalty (optional):</label>
+          <label>Repetition Penalty (optional)</label>
           <input
             type="number"
             step="0.1"
             value={repetitionPenalty}
             onChange={(e) => setRepetitionPenalty(e.target.value)}
             placeholder="1.1"
+            disabled={loading}
           />
         </div>
         <div className="form-group">
-          <label>Max Length (optional):</label>
+          <label>Max Length (optional)</label>
           <input
             type="number"
             value={maxLength}
             onChange={(e) => setMaxLength(e.target.value)}
             placeholder="4000"
+            disabled={loading}
           />
         </div>
       </div>
-      <button type="submit" className="button">Test Speak</button>
+      <button type="submit" className="button" disabled={loading}>
+        {loading ? 'Loading...' : 'Test Speak'}
+      </button>
       {response && (
         <div className={`response ${response.error ? 'error' : 'success'}`}>
           <h4>Response:</h4>
