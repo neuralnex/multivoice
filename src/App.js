@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import './App.css';
 import axios from 'axios';
 
@@ -6,794 +6,421 @@ const API_BASE_URL = 'https://nexusbert-multi-voice-system.hf.space';
 
 function App() {
   const [baseUrl, setBaseUrl] = useState(API_BASE_URL);
-  const [responses, setResponses] = useState({});
-  const [loading, setLoading] = useState({});
+  const [messages, setMessages] = useState([]);
+  const [selectedLanguage, setSelectedLanguage] = useState('english');
+  const [isRecording, setIsRecording] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const mediaRecorderRef = useRef(null);
+  const audioChunksRef = useRef([]);
+  const messagesEndRef = useRef(null);
 
-  const updateResponse = (endpoint, data, error = null) => {
-    setResponses(prev => ({
-      ...prev,
-      [endpoint]: { data, error, timestamp: new Date().toISOString() }
-    }));
-    setLoading(prev => ({ ...prev, [endpoint]: false }));
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
-  const setEndpointLoading = (endpoint, isLoading) => {
-    setLoading(prev => ({ ...prev, [endpoint]: isLoading }));
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages]);
+
+  const addMessage = (text, type, audioUrl = null, transcription = null) => {
+    setMessages(prev => [...prev, {
+      id: Date.now(),
+      text,
+      type, // 'user', 'transcription', 'tts', 'error'
+      audioUrl,
+      transcription,
+      timestamp: new Date(),
+      language: selectedLanguage
+    }]);
   };
 
-  // GET / - Root endpoint
-  const testRoot = async () => {
-    setEndpointLoading('root', true);
+  const startRecording = async () => {
     try {
-      const response = await axios.get(`${baseUrl}/`);
-      updateResponse('root', response.data);
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        } 
+      });
+      
+      // Try to use mimeType that's supported
+      let mimeType = 'audio/webm';
+      if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
+        mimeType = 'audio/webm;codecs=opus';
+      } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
+        mimeType = 'audio/mp4';
+      } else if (MediaRecorder.isTypeSupported('audio/ogg')) {
+        mimeType = 'audio/ogg';
+      }
+      
+      const mediaRecorder = new MediaRecorder(stream, { mimeType });
+      mediaRecorderRef.current = mediaRecorder;
+      audioChunksRef.current = [];
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      mediaRecorder.onstop = async () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: mimeType });
+        await handleAudioSubmit(audioBlob);
+        stream.getTracks().forEach(track => track.stop());
+      };
+
+      mediaRecorder.start(100); // Collect data every 100ms
+      setIsRecording(true);
     } catch (error) {
-      updateResponse('root', null, error.response?.data || error.message);
+      console.error('Recording error:', error);
+      addMessage('Error accessing microphone. Please allow microphone permissions.', 'error');
     }
   };
 
-  // GET /health - Health check
-  const testHealth = async () => {
-    setEndpointLoading('health', true);
-    try {
-      const response = await axios.get(`${baseUrl}/health`);
-      updateResponse('health', response.data);
-    } catch (error) {
-      updateResponse('health', null, error.response?.data || error.message);
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
     }
   };
 
-  // POST /ask - Ask query
-  const testAsk = async (query) => {
-    setEndpointLoading('ask', true);
+  const handleAudioSubmit = async (audioBlob) => {
+    setIsProcessing(true);
+    const audioUrl = URL.createObjectURL(audioBlob);
+    addMessage('🎤 Voice note', 'user', audioUrl);
+
     try {
       const formData = new FormData();
-      formData.append('query', query);
-      const response = await axios.post(`${baseUrl}/ask`, formData);
-      updateResponse('ask', response.data);
+      // Use a generic filename - backend should handle format conversion
+      const filename = audioBlob.type.includes('webm') ? 'recording.webm' : 
+                      audioBlob.type.includes('mp4') ? 'recording.m4a' : 
+                      'recording.ogg';
+      formData.append('audio_file', audioBlob, filename);
+
+      // Transcribe using language-specific endpoint
+      const transcribeResponse = await axios.post(
+        `${baseUrl}/transcribe/${selectedLanguage}`,
+        formData,
+        { 
+          headers: { 'Content-Type': 'multipart/form-data' },
+          timeout: 60000 // 60 second timeout for transcription
+        }
+      );
+
+      const transcription = transcribeResponse.data.transcription || 
+                           transcribeResponse.data.text || 
+                           '';
+      
+      if (transcription && transcription.trim()) {
+        addMessage(transcription, 'transcription');
+        
+        // Generate TTS response
+        const ttsResponse = await axios.post(
+          `${baseUrl}/tts/${selectedLanguage}`,
+          {
+            text: transcription,
+            language: selectedLanguage,
+            speaker_name: getDefaultSpeaker(selectedLanguage),
+            temperature: 0.1,
+            repetition_penalty: 1.1,
+            max_length: 4000
+          },
+          { 
+            responseType: 'blob',
+            timeout: 60000 // 60 second timeout for TTS
+          }
+        );
+
+        const responseAudioUrl = URL.createObjectURL(ttsResponse.data);
+        addMessage('Response', 'tts', responseAudioUrl, transcription);
+      } else {
+        addMessage('No transcription received. Please try speaking more clearly.', 'error');
+      }
     } catch (error) {
-      updateResponse('ask', null, error.response?.data || error.message);
+      console.error('Audio processing error:', error);
+      const errorMsg = error.response?.data?.detail || 
+                      error.response?.data?.message || 
+                      error.message || 
+                      'An error occurred while processing your voice note';
+      addMessage(`Error: ${errorMsg}`, 'error');
+    } finally {
+      setIsProcessing(false);
     }
   };
 
-  // POST /transcribe - Transcribe audio
-  const testTranscribe = async (audioFile, language) => {
-    setEndpointLoading('transcribe', true);
-    try {
-      const formData = new FormData();
-      formData.append('audio_file', audioFile);
-      formData.append('language', language);
-      const response = await axios.post(`${baseUrl}/transcribe`, formData, {
-        headers: { 'Content-Type': 'multipart/form-data' }
-      });
-      updateResponse('transcribe', response.data);
-    } catch (error) {
-      updateResponse('transcribe', null, error.response?.data || error.message);
-    }
+  const getDefaultSpeaker = (lang) => {
+    const speakers = {
+      'english': 'idera',
+      'yoruba': 'yoruba_male2',
+      'igbo': 'igbo_male2',
+      'hausa': 'hausa_female1'
+    };
+    return speakers[lang] || 'idera';
   };
 
-  // POST /transcribe/{language} - Language-specific transcribe
-  const testTranscribeLanguage = async (audioFile, language) => {
-    setEndpointLoading(`transcribe_${language}`, true);
-    try {
-      const formData = new FormData();
-      formData.append('audio_file', audioFile);
-      const response = await axios.post(`${baseUrl}/transcribe/${language}`, formData, {
-        headers: { 'Content-Type': 'multipart/form-data' }
-      });
-      updateResponse(`transcribe_${language}`, response.data);
-    } catch (error) {
-      updateResponse(`transcribe_${language}`, null, error.response?.data || error.message);
-    }
-  };
+  const sendTextMessage = async (text) => {
+    if (!text.trim()) return;
 
-  // POST /speak-ai - Speak AI
-  const testSpeakAI = async (audioFile, language) => {
-    setEndpointLoading('speak-ai', true);
-    try {
-      const formData = new FormData();
-      formData.append('audio_file', audioFile);
-      formData.append('language', language);
-      const response = await axios.post(`${baseUrl}/speak-ai`, formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-        responseType: 'blob'
-      });
-      const audioUrl = URL.createObjectURL(response.data);
-      updateResponse('speak-ai', { audioUrl, message: 'Audio generated successfully' });
-    } catch (error) {
-      updateResponse('speak-ai', null, error.response?.data || error.message);
-    }
-  };
+    addMessage(text, 'user');
+    setIsProcessing(true);
 
-  // POST /tts - Text to speech
-  const testTTS = async (text, language, speakerName, temperature, repetitionPenalty, maxLength) => {
-    setEndpointLoading('tts', true);
     try {
-      const response = await axios.post(`${baseUrl}/tts`, {
-        text,
-        language,
-        speaker_name: speakerName,
-        temperature: parseFloat(temperature),
-        repetition_penalty: parseFloat(repetitionPenalty),
-        max_length: parseInt(maxLength)
-      }, {
-        responseType: 'blob'
-      });
-      const audioUrl = URL.createObjectURL(response.data);
-      updateResponse('tts', { audioUrl, message: 'TTS audio generated successfully' });
-    } catch (error) {
-      updateResponse('tts', null, error.response?.data || error.message);
-    }
-  };
+      const ttsResponse = await axios.post(
+        `${baseUrl}/tts/${selectedLanguage}`,
+        {
+          text: text,
+          language: selectedLanguage,
+          speaker_name: getDefaultSpeaker(selectedLanguage),
+          temperature: 0.1,
+          repetition_penalty: 1.1,
+          max_length: 4000
+        },
+        { responseType: 'blob' }
+      );
 
-  // POST /tts/{language} - Language-specific TTS
-  const testTTSLanguage = async (text, language, speakerName, temperature, repetitionPenalty, maxLength) => {
-    setEndpointLoading(`tts_${language}`, true);
-    try {
-      const response = await axios.post(`${baseUrl}/tts/${language}`, {
-        text,
-        language,
-        speaker_name: speakerName,
-        temperature: parseFloat(temperature),
-        repetition_penalty: parseFloat(repetitionPenalty),
-        max_length: parseInt(maxLength)
-      }, {
-        responseType: 'blob'
-      });
-      const audioUrl = URL.createObjectURL(response.data);
-      updateResponse(`tts_${language}`, { audioUrl, message: 'TTS audio generated successfully' });
+      const audioUrl = URL.createObjectURL(ttsResponse.data);
+      addMessage('TTS generated', 'tts', audioUrl, text);
     } catch (error) {
-      updateResponse(`tts_${language}`, null, error.response?.data || error.message);
-    }
-  };
-
-  // POST /speak - Speak
-  const testSpeak = async (text, language, temperature, repetitionPenalty, maxLength) => {
-    setEndpointLoading('speak', true);
-    try {
-      const response = await axios.post(`${baseUrl}/speak`, {
-        text,
-        language,
-        temperature: temperature ? parseFloat(temperature) : null,
-        repetition_penalty: repetitionPenalty ? parseFloat(repetitionPenalty) : null,
-        max_length: maxLength ? parseInt(maxLength) : null
-      }, {
-        responseType: 'blob'
-      });
-      const audioUrl = URL.createObjectURL(response.data);
-      updateResponse('speak', { audioUrl, message: 'Speech audio generated successfully' });
-    } catch (error) {
-      updateResponse('speak', null, error.response?.data || error.message);
-    }
-  };
-
-  // POST /tts-stream - TTS Stream
-  const testTTSStream = async (text, language, speakerName, temperature, repetitionPenalty, maxLength) => {
-    setEndpointLoading('tts-stream', true);
-    try {
-      const response = await axios.post(`${baseUrl}/tts-stream`, {
-        text,
-        language,
-        speaker_name: speakerName,
-        temperature: parseFloat(temperature),
-        repetition_penalty: parseFloat(repetitionPenalty),
-        max_length: parseInt(maxLength)
-      }, {
-        responseType: 'blob'
-      });
-      const audioUrl = URL.createObjectURL(response.data);
-      updateResponse('tts-stream', { audioUrl, message: 'Streaming TTS audio generated successfully' });
-    } catch (error) {
-      updateResponse('tts-stream', null, error.response?.data || error.message);
+      addMessage(
+        `Error: ${error.response?.data?.detail || error.message}`,
+        'error'
+      );
+    } finally {
+      setIsProcessing(false);
     }
   };
 
   return (
     <div className="app">
-      <div className="header">
-        <h1>Multi Voice System API Tester</h1>
-        <p>Test and interact with all FastAPI endpoints</p>
-      </div>
-
-      <div className="api-base-url">
-        <label>API Base URL:</label>
-        <input
-          type="text"
-          value={baseUrl}
-          onChange={(e) => setBaseUrl(e.target.value)}
-          placeholder="https://nexusbert-multi-voice-system.hf.space"
-        />
-      </div>
-
-      {/* GET Endpoints */}
-      <div className="endpoint-section">
-        <h2>GET Endpoints</h2>
-        
-        <div className="endpoint-card">
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.5rem' }}>
-            <span className="method get">GET</span>
-            <span className="path">/</span>
-          </div>
-          <p style={{ marginBottom: '1rem', color: '#6c757d', fontSize: '0.875rem' }}>Root endpoint - Get system information</p>
-          <button 
-            className="button" 
-            onClick={testRoot}
-            disabled={loading.root}
-          >
-            {loading.root ? 'Loading...' : 'Test Root'}
-          </button>
-          {responses.root && (
-            <div className={`response ${responses.root.error ? 'error' : 'success'}`}>
-              <h4>Response:</h4>
-              <pre>{JSON.stringify(responses.root.error || responses.root.data, null, 2)}</pre>
+      <div className="chat-container">
+        <div className="chat-header">
+          <div className="header-content">
+            <h1>Multi Voice System</h1>
+            <div className="language-selector">
+              <label>Language:</label>
+              <select 
+                value={selectedLanguage} 
+                onChange={(e) => setSelectedLanguage(e.target.value)}
+                disabled={isProcessing || isRecording}
+              >
+                <option value="english">English</option>
+                <option value="yoruba">Yoruba</option>
+                <option value="igbo">Igbo</option>
+                <option value="hausa">Hausa</option>
+              </select>
             </div>
-          )}
+          </div>
+          <div className="api-url-config">
+            <input
+              type="text"
+              value={baseUrl}
+              onChange={(e) => setBaseUrl(e.target.value)}
+              placeholder="API Base URL"
+            />
+          </div>
         </div>
 
-        <div className="endpoint-card">
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.5rem' }}>
-            <span className="method get">GET</span>
-            <span className="path">/health</span>
-          </div>
-          <p style={{ marginBottom: '1rem', color: '#6c757d', fontSize: '0.875rem' }}>Health check endpoint</p>
-          <button 
-            className="button" 
-            onClick={testHealth}
-            disabled={loading.health}
-          >
-            {loading.health ? 'Loading...' : 'Test Health'}
-          </button>
-          {responses.health && (
-            <div className={`response ${responses.health.error ? 'error' : 'success'}`}>
-              <h4>Response:</h4>
-              <pre>{JSON.stringify(responses.health.error || responses.health.data, null, 2)}</pre>
+        <div className="chat-messages">
+          {messages.length === 0 && (
+            <div className="empty-state">
+              <div className="empty-icon">🎤</div>
+              <h2>Start a conversation</h2>
+              <p>Record a voice note or type a message to get started</p>
             </div>
           )}
+          
+          {messages.map((message) => (
+            <MessageBubble key={message.id} message={message} />
+          ))}
+          
+          {isProcessing && (
+            <div className="message-bubble system">
+              <div className="typing-indicator">
+                <span></span>
+                <span></span>
+                <span></span>
+              </div>
+            </div>
+          )}
+          
+          <div ref={messagesEndRef} />
         </div>
-      </div>
 
-      {/* POST /ask */}
-      <div className="endpoint-section">
-        <h2>POST /ask</h2>
-        <AskForm onSubmit={testAsk} response={responses.ask} loading={loading.ask} />
-      </div>
-
-      {/* POST /transcribe */}
-      <div className="endpoint-section">
-        <h2>POST /transcribe</h2>
-        <TranscribeForm onSubmit={testTranscribe} response={responses.transcribe} loading={loading.transcribe} />
-      </div>
-
-      {/* POST /transcribe/{language} */}
-      <div className="endpoint-section">
-        <h2>POST /transcribe/{'{language}'}</h2>
-        <TranscribeLanguageForm onSubmit={testTranscribeLanguage} response={responses} loading={loading} />
-      </div>
-
-      {/* POST /speak-ai */}
-      <div className="endpoint-section">
-        <h2>POST /speak-ai</h2>
-        <SpeakAIForm onSubmit={testSpeakAI} response={responses['speak-ai']} loading={loading['speak-ai']} />
-      </div>
-
-      {/* POST /tts */}
-      <div className="endpoint-section">
-        <h2>POST /tts</h2>
-        <TTSForm onSubmit={testTTS} response={responses.tts} loading={loading.tts} />
-      </div>
-
-      {/* POST /tts/{language} */}
-      <div className="endpoint-section">
-        <h2>POST /tts/{'{language}'}</h2>
-        <TTSLanguageForm onSubmit={testTTSLanguage} response={responses} loading={loading} />
-      </div>
-
-      {/* POST /speak */}
-      <div className="endpoint-section">
-        <h2>POST /speak</h2>
-        <SpeakForm onSubmit={testSpeak} response={responses.speak} loading={loading.speak} />
-      </div>
-
-      {/* POST /tts-stream */}
-      <div className="endpoint-section">
-        <h2>POST /tts-stream</h2>
-        <TTSForm onSubmit={testTTSStream} response={responses['tts-stream']} loading={loading['tts-stream']} />
+        <div className="chat-input">
+          <div className="input-container">
+            <input
+              type="text"
+              placeholder="Type a message..."
+              onKeyPress={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  sendTextMessage(e.target.value);
+                  e.target.value = '';
+                }
+              }}
+              disabled={isProcessing || isRecording}
+            />
+            <button
+              className="send-button"
+              onClick={(e) => {
+                const input = e.target.previousElementSibling;
+                sendTextMessage(input.value);
+                input.value = '';
+              }}
+              disabled={isProcessing || isRecording}
+            >
+              ➤
+            </button>
+          </div>
+          
+          <div className="voice-controls">
+            <button
+              className={`voice-button ${isRecording ? 'recording' : ''}`}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                if (!isProcessing) startRecording();
+              }}
+              onMouseUp={(e) => {
+                e.preventDefault();
+                if (isRecording) stopRecording();
+              }}
+              onMouseLeave={(e) => {
+                if (isRecording) {
+                  e.preventDefault();
+                  stopRecording();
+                }
+              }}
+              onTouchStart={(e) => {
+                e.preventDefault();
+                if (!isProcessing) startRecording();
+              }}
+              onTouchEnd={(e) => {
+                e.preventDefault();
+                if (isRecording) stopRecording();
+              }}
+              onTouchCancel={(e) => {
+                e.preventDefault();
+                if (isRecording) stopRecording();
+              }}
+              disabled={isProcessing}
+              type="button"
+            >
+              {isRecording ? (
+                <>
+                  <span className="pulse"></span>
+                  <span>Release to send</span>
+                </>
+              ) : (
+                <>
+                  <span className="mic-icon">🎤</span>
+                  <span>Hold to record</span>
+                </>
+              )}
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );
 }
 
-// Ask Form Component
-function AskForm({ onSubmit, response, loading }) {
-  const [query, setQuery] = useState('');
+function MessageBubble({ message }) {
+  const [isPlaying, setIsPlaying] = useState(false);
+  const audioRef = useRef(null);
 
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    onSubmit(query);
-  };
-
-  return (
-    <form onSubmit={handleSubmit}>
-      <div className="form-group">
-        <label>Query</label>
-        <input
-          type="text"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Enter your query"
-          required
-          disabled={loading}
-        />
-      </div>
-      <button type="submit" className="button" disabled={loading}>
-        {loading ? 'Loading...' : 'Test Ask'}
-      </button>
-      {response && (
-        <div className={`response ${response.error ? 'error' : 'success'}`}>
-          <h4>Response:</h4>
-          <pre>{JSON.stringify(response.error || response.data, null, 2)}</pre>
-        </div>
-      )}
-    </form>
-  );
-}
-
-// Transcribe Form Component
-function TranscribeForm({ onSubmit, response, loading }) {
-  const [audioFile, setAudioFile] = useState(null);
-  const [language, setLanguage] = useState('en');
-
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    if (audioFile) {
-      onSubmit(audioFile, language);
+  const handlePlay = () => {
+    if (audioRef.current) {
+      if (isPlaying) {
+        audioRef.current.pause();
+      } else {
+        audioRef.current.play();
+      }
+      setIsPlaying(!isPlaying);
     }
   };
 
-  return (
-    <form onSubmit={handleSubmit}>
-      <div className="form-group">
-        <label>Audio File</label>
-        <input
-          type="file"
-          accept="audio/*"
-          onChange={(e) => setAudioFile(e.target.files[0])}
-          required
-          disabled={loading}
-        />
-      </div>
-      <div className="form-group">
-        <label>Language Code</label>
-        <select value={language} onChange={(e) => setLanguage(e.target.value)} disabled={loading}>
-          <option value="en">English (en)</option>
-          <option value="yo">Yoruba (yo)</option>
-          <option value="ig">Igbo (ig)</option>
-          <option value="ha">Hausa (ha)</option>
-        </select>
-      </div>
-      <button type="submit" className="button" disabled={loading}>
-        {loading ? 'Loading...' : 'Test Transcribe'}
-      </button>
-      {response && (
-        <div className={`response ${response.error ? 'error' : 'success'}`}>
-          <h4>Response:</h4>
-          <pre>{JSON.stringify(response.error || response.data, null, 2)}</pre>
-        </div>
-      )}
-    </form>
-  );
-}
-
-// Transcribe Language Form Component
-function TranscribeLanguageForm({ onSubmit, response, loading }) {
-  const [audioFile, setAudioFile] = useState(null);
-  const [language, setLanguage] = useState('english');
-  const isLoading = loading[`transcribe_${language}`];
-
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    if (audioFile) {
-      onSubmit(audioFile, language);
-    }
+  const formatTime = (date) => {
+    return new Date(date).toLocaleTimeString('en-US', {
+      hour: '2-digit',
+      minute: '2-digit'
+    });
   };
 
   return (
-    <form onSubmit={handleSubmit}>
-      <div className="form-group">
-        <label>Audio File</label>
-        <input
-          type="file"
-          accept="audio/*"
-          onChange={(e) => setAudioFile(e.target.files[0])}
-          required
-          disabled={isLoading}
-        />
-      </div>
-      <div className="form-group">
-        <label>Language</label>
-        <select value={language} onChange={(e) => setLanguage(e.target.value)} disabled={isLoading}>
-          <option value="english">English</option>
-          <option value="yoruba">Yoruba</option>
-          <option value="igbo">Igbo</option>
-          <option value="hausa">Hausa</option>
-        </select>
-      </div>
-      <button type="submit" className="button" disabled={isLoading}>
-        {isLoading ? 'Loading...' : `Test Transcribe ${language}`}
-      </button>
-      {response[`transcribe_${language}`] && (
-        <div className={`response ${response[`transcribe_${language}`].error ? 'error' : 'success'}`}>
-          <h4>Response:</h4>
-          <pre>{JSON.stringify(response[`transcribe_${language}`].error || response[`transcribe_${language}`].data, null, 2)}</pre>
+    <div className={`message-bubble ${message.type}`}>
+      {message.type === 'user' && message.audioUrl && (
+        <div className="voice-note user-voice">
+          <button className="play-button" onClick={handlePlay} type="button">
+            {isPlaying ? '⏸' : '▶'}
+          </button>
+          <div className="voice-info">
+            <span className="voice-label">{message.text || 'Voice note'}</span>
+            <span className="voice-time">{formatTime(message.timestamp)}</span>
+          </div>
+          <audio
+            ref={audioRef}
+            src={message.audioUrl}
+            onEnded={() => setIsPlaying(false)}
+            onPause={() => setIsPlaying(false)}
+            style={{ display: 'none' }}
+          />
         </div>
       )}
-    </form>
-  );
-}
 
-// Speak AI Form Component
-function SpeakAIForm({ onSubmit, response, loading }) {
-  const [audioFile, setAudioFile] = useState(null);
-  const [language, setLanguage] = useState('en');
+      {message.type === 'transcription' && (
+        <div className="transcription-bubble">
+          <div className="transcription-header">
+            <span className="transcription-icon">📝</span>
+            <span>Transcription</span>
+          </div>
+          <p>{message.text}</p>
+        </div>
+      )}
 
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    if (audioFile) {
-      onSubmit(audioFile, language);
-    }
-  };
-
-  return (
-    <form onSubmit={handleSubmit}>
-      <div className="form-group">
-        <label>Audio File</label>
-        <input
-          type="file"
-          accept="audio/*"
-          onChange={(e) => setAudioFile(e.target.files[0])}
-          required
-          disabled={loading}
-        />
-      </div>
-      <div className="form-group">
-        <label>Language Code</label>
-        <select value={language} onChange={(e) => setLanguage(e.target.value)} disabled={loading}>
-          <option value="en">English (en)</option>
-          <option value="yo">Yoruba (yo)</option>
-          <option value="ig">Igbo (ig)</option>
-          <option value="ha">Hausa (ha)</option>
-        </select>
-      </div>
-      <button type="submit" className="button" disabled={loading}>
-        {loading ? 'Loading...' : 'Test Speak AI'}
-      </button>
-      {response && (
-        <div className={`response ${response.error ? 'error' : 'success'}`}>
-          <h4>Response:</h4>
-          {response.error ? (
-            <pre>{JSON.stringify(response.error, null, 2)}</pre>
-          ) : (
-            <div>
-              <p>{response.data?.message}</p>
-              {response.data?.audioUrl && (
-                <div className="audio-player">
-                  <audio controls src={response.data.audioUrl}>
-                    Your browser does not support the audio element.
-                  </audio>
-                </div>
-              )}
-            </div>
+      {message.type === 'tts' && message.audioUrl && (
+        <div className="tts-bubble">
+          <div className="tts-header">
+            <span className="tts-icon">🔊</span>
+            <span>Response</span>
+          </div>
+          {message.transcription && (
+            <p className="tts-text">{message.transcription}</p>
           )}
-        </div>
-      )}
-    </form>
-  );
-}
-
-// TTS Form Component
-function TTSForm({ onSubmit, response, loading }) {
-  const [text, setText] = useState('Hello, this is a test of the text to speech system.');
-  const [language, setLanguage] = useState('english');
-  const [speakerName, setSpeakerName] = useState('idera');
-  const [temperature, setTemperature] = useState('0.1');
-  const [repetitionPenalty, setRepetitionPenalty] = useState('1.1');
-  const [maxLength, setMaxLength] = useState('4000');
-
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    onSubmit(text, language, speakerName, temperature, repetitionPenalty, maxLength);
-  };
-
-  return (
-    <form onSubmit={handleSubmit}>
-      <div className="form-group">
-        <label>Text</label>
-        <textarea
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          placeholder="Enter text to convert to speech"
-          required
-          disabled={loading}
-        />
-      </div>
-      <div className="form-row">
-        <div className="form-group">
-          <label>Language</label>
-          <select value={language} onChange={(e) => setLanguage(e.target.value)} disabled={loading}>
-            <option value="english">English</option>
-            <option value="yoruba">Yoruba</option>
-            <option value="igbo">Igbo</option>
-            <option value="hausa">Hausa</option>
-          </select>
-        </div>
-        <div className="form-group">
-          <label>Speaker Name</label>
-          <input
-            type="text"
-            value={speakerName}
-            onChange={(e) => setSpeakerName(e.target.value)}
-            placeholder="idera"
-            disabled={loading}
-          />
-        </div>
-        <div className="form-group">
-          <label>Temperature</label>
-          <input
-            type="number"
-            step="0.1"
-            value={temperature}
-            onChange={(e) => setTemperature(e.target.value)}
-            placeholder="0.1"
-            disabled={loading}
-          />
-        </div>
-        <div className="form-group">
-          <label>Repetition Penalty</label>
-          <input
-            type="number"
-            step="0.1"
-            value={repetitionPenalty}
-            onChange={(e) => setRepetitionPenalty(e.target.value)}
-            placeholder="1.1"
-            disabled={loading}
-          />
-        </div>
-        <div className="form-group">
-          <label>Max Length</label>
-          <input
-            type="number"
-            value={maxLength}
-            onChange={(e) => setMaxLength(e.target.value)}
-            placeholder="4000"
-            disabled={loading}
-          />
-        </div>
-      </div>
-      <button type="submit" className="button" disabled={loading}>
-        {loading ? 'Loading...' : 'Test TTS'}
-      </button>
-      {response && (
-        <div className={`response ${response.error ? 'error' : 'success'}`}>
-          <h4>Response:</h4>
-          {response.error ? (
-            <pre>{JSON.stringify(response.error, null, 2)}</pre>
-          ) : (
-            <div>
-              <p>{response.data?.message}</p>
-              {response.data?.audioUrl && (
-                <div className="audio-player">
-                  <audio controls src={response.data.audioUrl}>
-                    Your browser does not support the audio element.
-                  </audio>
-                </div>
-              )}
+          <div className="audio-player-bubble">
+            <button className="play-button" onClick={handlePlay} type="button">
+              {isPlaying ? '⏸' : '▶'}
+            </button>
+            <div className="audio-info">
+              <span>Audio response</span>
+              <span className="audio-time">{formatTime(message.timestamp)}</span>
             </div>
-          )}
+            <audio
+              ref={audioRef}
+              src={message.audioUrl}
+              onEnded={() => setIsPlaying(false)}
+              onPause={() => setIsPlaying(false)}
+              style={{ display: 'none' }}
+            />
+          </div>
         </div>
       )}
-    </form>
-  );
-}
 
-// TTS Language Form Component
-function TTSLanguageForm({ onSubmit, response, loading }) {
-  const [text, setText] = useState('Hello, this is a test of the text to speech system.');
-  const [language, setLanguage] = useState('english');
-  const [speakerName, setSpeakerName] = useState('idera');
-  const [temperature, setTemperature] = useState('0.1');
-  const [repetitionPenalty, setRepetitionPenalty] = useState('1.1');
-  const [maxLength, setMaxLength] = useState('4000');
-  const isLoading = loading[`tts_${language}`];
-
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    onSubmit(text, language, speakerName, temperature, repetitionPenalty, maxLength);
-  };
-
-  return (
-    <form onSubmit={handleSubmit}>
-      <div className="form-group">
-        <label>Text</label>
-        <textarea
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          placeholder="Enter text to convert to speech"
-          required
-          disabled={isLoading}
-        />
-      </div>
-      <div className="form-row">
-        <div className="form-group">
-          <label>Language</label>
-          <select value={language} onChange={(e) => setLanguage(e.target.value)} disabled={isLoading}>
-            <option value="english">English</option>
-            <option value="yoruba">Yoruba</option>
-            <option value="igbo">Igbo</option>
-            <option value="hausa">Hausa</option>
-          </select>
-        </div>
-        <div className="form-group">
-          <label>Speaker Name</label>
-          <input
-            type="text"
-            value={speakerName}
-            onChange={(e) => setSpeakerName(e.target.value)}
-            placeholder="idera"
-            disabled={isLoading}
-          />
-        </div>
-        <div className="form-group">
-          <label>Temperature</label>
-          <input
-            type="number"
-            step="0.1"
-            value={temperature}
-            onChange={(e) => setTemperature(e.target.value)}
-            placeholder="0.1"
-            disabled={isLoading}
-          />
-        </div>
-        <div className="form-group">
-          <label>Repetition Penalty</label>
-          <input
-            type="number"
-            step="0.1"
-            value={repetitionPenalty}
-            onChange={(e) => setRepetitionPenalty(e.target.value)}
-            placeholder="1.1"
-            disabled={isLoading}
-          />
-        </div>
-        <div className="form-group">
-          <label>Max Length</label>
-          <input
-            type="number"
-            value={maxLength}
-            onChange={(e) => setMaxLength(e.target.value)}
-            placeholder="4000"
-            disabled={isLoading}
-          />
-        </div>
-      </div>
-      <button type="submit" className="button" disabled={isLoading}>
-        {isLoading ? 'Loading...' : `Test TTS ${language}`}
-      </button>
-      {response[`tts_${language}`] && (
-        <div className={`response ${response[`tts_${language}`].error ? 'error' : 'success'}`}>
-          <h4>Response:</h4>
-          {response[`tts_${language}`].error ? (
-            <pre>{JSON.stringify(response[`tts_${language}`].error, null, 2)}</pre>
-          ) : (
-            <div>
-              <p>{response[`tts_${language}`].data?.message}</p>
-              {response[`tts_${language}`].data?.audioUrl && (
-                <div className="audio-player">
-                  <audio controls src={response[`tts_${language}`].data.audioUrl}>
-                    Your browser does not support the audio element.
-                  </audio>
-                </div>
-              )}
-            </div>
-          )}
+      {message.type === 'error' && (
+        <div className="error-bubble">
+          <span className="error-icon">⚠️</span>
+          <span>{message.text}</span>
         </div>
       )}
-    </form>
-  );
-}
 
-// Speak Form Component
-function SpeakForm({ onSubmit, response, loading }) {
-  const [text, setText] = useState('Hello, this is a test of the speak system.');
-  const [language, setLanguage] = useState('english');
-  const [temperature, setTemperature] = useState('');
-  const [repetitionPenalty, setRepetitionPenalty] = useState('');
-  const [maxLength, setMaxLength] = useState('');
-
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    onSubmit(text, language, temperature, repetitionPenalty, maxLength);
-  };
-
-  return (
-    <form onSubmit={handleSubmit}>
-      <div className="form-group">
-        <label>Text</label>
-        <textarea
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          placeholder="Enter text to speak"
-          required
-          disabled={loading}
-        />
-      </div>
-      <div className="form-row">
-        <div className="form-group">
-          <label>Language</label>
-          <select value={language} onChange={(e) => setLanguage(e.target.value)} disabled={loading}>
-            <option value="english">English</option>
-            <option value="yoruba">Yoruba</option>
-            <option value="igbo">Igbo</option>
-            <option value="hausa">Hausa</option>
-          </select>
-        </div>
-        <div className="form-group">
-          <label>Temperature (optional)</label>
-          <input
-            type="number"
-            step="0.1"
-            value={temperature}
-            onChange={(e) => setTemperature(e.target.value)}
-            placeholder="0.1"
-            disabled={loading}
-          />
-        </div>
-        <div className="form-group">
-          <label>Repetition Penalty (optional)</label>
-          <input
-            type="number"
-            step="0.1"
-            value={repetitionPenalty}
-            onChange={(e) => setRepetitionPenalty(e.target.value)}
-            placeholder="1.1"
-            disabled={loading}
-          />
-        </div>
-        <div className="form-group">
-          <label>Max Length (optional)</label>
-          <input
-            type="number"
-            value={maxLength}
-            onChange={(e) => setMaxLength(e.target.value)}
-            placeholder="4000"
-            disabled={loading}
-          />
-        </div>
-      </div>
-      <button type="submit" className="button" disabled={loading}>
-        {loading ? 'Loading...' : 'Test Speak'}
-      </button>
-      {response && (
-        <div className={`response ${response.error ? 'error' : 'success'}`}>
-          <h4>Response:</h4>
-          {response.error ? (
-            <pre>{JSON.stringify(response.error, null, 2)}</pre>
-          ) : (
-            <div>
-              <p>{response.data?.message}</p>
-              {response.data?.audioUrl && (
-                <div className="audio-player">
-                  <audio controls src={response.data.audioUrl}>
-                    Your browser does not support the audio element.
-                  </audio>
-                </div>
-              )}
-            </div>
-          )}
+      {message.type === 'user' && !message.audioUrl && (
+        <div className="text-message">
+          <p>{message.text}</p>
+          <span className="message-time">{formatTime(message.timestamp)}</span>
         </div>
       )}
-    </form>
+    </div>
   );
 }
 
 export default App;
-
