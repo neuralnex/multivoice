@@ -211,14 +211,6 @@ function App() {
               </select>
             </div>
           </div>
-          <div className="api-url-config">
-            <input
-              type="text"
-              value={baseUrl}
-              onChange={(e) => setBaseUrl(e.target.value)}
-              placeholder="API Base URL"
-            />
-          </div>
         </div>
 
         <div className="chat-messages">

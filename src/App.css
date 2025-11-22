@@ -70,30 +70,6 @@
   color: white;
 }
 
-.api-url-config {
-  margin-top: 0.5rem;
-}
-
-.api-url-config input {
-  width: 100%;
-  padding: 0.5rem;
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  border-radius: 6px;
-  background: rgba(255, 255, 255, 0.1);
-  color: white;
-  font-size: 0.75rem;
-  font-family: 'SF Mono', Monaco, monospace;
-}
-
-.api-url-config input::placeholder {
-  color: rgba(255, 255, 255, 0.6);
-}
-
-.api-url-config input:focus {
-  outline: none;
-  border-color: rgba(255, 255, 255, 0.4);
-  background: rgba(255, 255, 255, 0.15);
-}
 
 .chat-messages {
   flex: 1;
